@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Street Atlas</title>
+<meta name="theme-color" content="#14061f">
+<meta name="description" content="A navigation app with a game-style look: missions, a garage and a car on your map.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Atlas">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Layout: full-screen map. Top stack (search or turn banner, mission timer, clock and cash),
+     radar bottom-left, controls bottom-right, route card at the very bottom, big splash in the middle. */
+  :root {
+    --ink: #14110f;
+    --accent: #f2b705;
+    --accent2: #f2b705;
+    --route: #e8363d;
+    --panel: rgba(20,17,15,.88);
+    --panel-line: rgba(255,255,255,.16);
+    --display: "Bebas Neue", Impact, "Arial Narrow", sans-serif;
+    --body: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+    --sa-t: env(safe-area-inset-top, 0px);
+    --sa-b: env(safe-area-inset-bottom, 0px);
+    --sa-l: env(safe-area-inset-left, 0px);
+    --sa-r: env(safe-area-inset-right, 0px);
+    --stack: 12px;
+  }
+  body.vice {
+    --ink: #14061f;
+    --accent: #ff4fa3;
+    --accent2: #ff9a3c;
+    --route: #19e3d4;
+    --panel: linear-gradient(135deg, rgba(52,12,84,.93), rgba(10,22,54,.93));
+    --panel-line: rgba(255,120,200,.4);
+  }
+  body.has-wp { --stack: 160px; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--ink); overscroll-behavior: none; }
+  body { font-family: var(--body); color: #fff; overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  #map { position: absolute; inset: 0; background: #b9a98a; }
+  body.vice #map { background: #1b0f33; }
+
+  /* Map look: CSS filters on the tile panes (main map and radar) */
+  .leaflet-tile-pane { transition: filter .4s; }
+  body.atlas .leaflet-tile-pane { filter: sepia(.45) saturate(.95) hue-rotate(-6deg) contrast(1.12) brightness(.93); }
+  body.vice .leaflet-tile-pane { filter: brightness(1.25) contrast(1.25) saturate(1.2); }
+  #wash, #glow, #vig { position: absolute; inset: 0; pointer-events: none; }
+  #wash { z-index: 450; opacity: 0; transition: opacity .4s; mix-blend-mode: color;
+    background: linear-gradient(165deg, #ff2d95 0%, #7a2cff 45%, #00e5d0 100%); }
+  #glow { z-index: 451; opacity: 0; transition: opacity .4s; mix-blend-mode: screen;
+    background: radial-gradient(120% 80% at 50% 110%, rgba(255,90,170,.45), transparent 60%); }
+  #vig { z-index: 452; box-shadow: inset 0 0 120px rgba(0,0,0,.45); }
+  body.vice #wash { opacity: .85; }
+  body.vice #glow { opacity: 1; }
+
+  .hud { position: absolute; z-index: 1000; }
+  button { font-family: inherit; }
+  button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+  /* Top stack */
+  #topstack { top: max(12px, var(--sa-t)); left: max(12px, var(--sa-l)); right: max(12px, var(--sa-r)); display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+  #topstack > * { pointer-events: auto; }
+  #search { position: relative; display: flex; background: var(--panel); border: 2px solid var(--panel-line); border-radius: 2px; }
+  #q { flex: 1; min-width: 0; background: transparent; border: 0; color: #fff; font: 600 20px var(--body); letter-spacing: .04em; text-transform: uppercase; padding: 12px; outline: none; -webkit-user-select: text; user-select: text; }
+  #q::placeholder { color: rgba(255,255,255,.5); }
+  #go { border: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); color: #14061f; font: 400 22px var(--display); letter-spacing: .06em; padding: 0 16px; cursor: pointer; }
+  #results { position: absolute; top: 100%; left: -2px; right: -2px; margin-top: 4px; background: var(--panel); border: 2px solid var(--panel-line); max-height: 40vh; overflow: auto; }
+  #results button { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--panel-line); color: #fff; font: 500 18px var(--body); padding: 10px 12px; cursor: pointer; }
+  #results button:hover, #results button:focus-visible { background: rgba(255,255,255,.1); outline: none; }
+  #results small { display: block; opacity: .6; font-size: 14px; }
+
+  #banner { display: flex; align-items: center; gap: 14px; background: var(--panel); border: 2px solid var(--panel-line); border-left: 8px solid var(--accent); padding: 10px 14px; }
+  #bArrow { flex: none; width: 56px; height: 56px; color: var(--accent2); display: grid; place-items: center; }
+  #bArrow svg { width: 100%; height: 100%; fill: currentColor; transition: transform .25s; }
+  #banner .meta { min-width: 0; }
+  #bDist { font: 400 40px/1 var(--display); letter-spacing: .04em; color: var(--accent2); font-variant-numeric: tabular-nums; }
+  #bText { font: 700 22px/1.1 var(--body); overflow-wrap: anywhere; }
+  #bRoad { font: 500 16px var(--body); opacity: .7; margin-top: 2px; overflow-wrap: anywhere; }
+
+  #row2 { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; pointer-events: none; }
+  #timer, #chip { background: var(--panel); border: 2px solid var(--panel-line); padding: 4px 10px; display: flex; align-items: baseline; gap: 8px; }
+  #timer span { font: 600 14px var(--body); letter-spacing: .14em; opacity: .75; }
+  #timer b { font: 400 30px/1 var(--display); letter-spacing: .06em; color: var(--accent2); font-variant-numeric: tabular-nums; }
+  #chip { margin-left: auto; }
+  #clock { font: 600 18px var(--body); letter-spacing: .08em; opacity: .85; font-variant-numeric: tabular-nums; }
+  #cash { font: 400 26px/1 var(--display); letter-spacing: .05em; color: #8dff9b; font-variant-numeric: tabular-nums; }
+  #hint { background: var(--panel); border-left: 6px solid var(--accent); padding: 8px 12px; font: 500 17px var(--body); transition: opacity .6s; pointer-events: none; }
+  #hint.gone { opacity: 0; }
+
+  /* Controls */
+  #side { right: max(12px, var(--sa-r)); bottom: calc(var(--stack) + var(--sa-b)); display: flex; flex-direction: column; gap: 6px; transition: bottom .2s; }
+  .btn { width: 48px; height: 48px; background: var(--panel); border: 2px solid var(--panel-line); color: #fff; font: 400 26px var(--display); cursor: pointer; border-radius: 2px; display: grid; place-items: center; padding: 0; }
+  .btn:active, .btn[aria-pressed="true"] { background: var(--accent); color: #14061f; }
+  .btn svg { width: 26px; height: 26px; }
+  #radar { left: max(12px, var(--sa-l)); bottom: calc(var(--stack) + var(--sa-b)); width: 118px; height: 118px; border-radius: 50%; overflow: hidden; border: 3px solid var(--accent); box-shadow: 0 4px 14px rgba(0,0,0,.5); pointer-events: none; isolation: isolate; transform: translateZ(0); transition: bottom .2s; background: #1b0f33; }
+  #radar i { position: absolute; left: 50%; top: 50%; width: 18px; height: 22px; margin: -11px 0 0 -9px; background: var(--accent2); clip-path: polygon(50% 0, 100% 100%, 50% 74%, 0 100%); z-index: 1000; }
+
+  /* Route card */
+  #wp { left: max(12px, var(--sa-l)); right: max(12px, var(--sa-r)); bottom: calc(12px + var(--sa-b)); background: var(--panel); border: 2px solid var(--panel-line); border-left: 8px solid var(--accent); padding: 10px 14px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px 14px; align-items: center; }
+  #wp .name { font: 400 28px/1 var(--display); letter-spacing: .05em; text-transform: uppercase; overflow-wrap: anywhere; }
+  #wp .sub { font: 500 17px var(--body); opacity: .75; margin-top: 2px; overflow-wrap: anywhere; }
+  #wp .stat { text-align: right; font: 400 30px/1 var(--display); color: var(--accent2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #wp .stat small { display: block; font: 500 15px var(--body); color: #fff; opacity: .7; letter-spacing: .06em; }
+  #wp .actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .act { background: none; border: 2px solid var(--panel-line); color: #fff; font: 400 20px var(--display); letter-spacing: .08em; padding: 8px 16px; cursor: pointer; }
+  .act.main { background: linear-gradient(90deg, var(--accent), var(--accent2)); border-color: transparent; color: #14061f; }
+  .only-mission { display: none; }
+  body.mission .only-mission { display: inline-block; }
+  body.mission .only-preview { display: none; }
+
+  /* Mission splash */
+  #splash { position: fixed; inset: 0; z-index: 2000; display: grid; place-content: center; text-align: center; pointer-events: none; opacity: 0; padding: 20px; background: radial-gradient(90% 60% at 50% 50%, rgba(20,6,31,.72), rgba(20,6,31,0) 70%); }
+  #splash.show { animation: pop 3s ease both; }
+  #splash .t { font: 400 clamp(54px, 17vw, 128px)/.92 var(--display); letter-spacing: .04em; background: linear-gradient(180deg, #fff3a6 0%, #ffb23c 42%, #ff3d8f 88%); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 6px 0 rgba(0,0,0,.5)); text-wrap: balance; }
+  #splash .s { margin-top: 10px; font: 700 clamp(20px, 5.5vw, 34px)/1.1 var(--body); letter-spacing: .1em; text-transform: uppercase; text-shadow: 0 2px 10px rgba(0,0,0,.8); overflow-wrap: anywhere; }
+  @keyframes pop { 0% { opacity: 0; transform: scale(1.6); } 12% { opacity: 1; transform: scale(1); } 82% { opacity: 1; } 100% { opacity: 0; transform: scale(.97); } }
+  #toast { left: 50%; transform: translateX(-50%); bottom: calc(var(--stack) + var(--sa-b) + 130px); background: var(--panel); border: 2px solid var(--panel-line); padding: 8px 14px; font: 600 17px var(--body); white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; }
+
+  /* Garage sheet */
+  #garage { left: 0; right: 0; bottom: 0; z-index: 1100; background: var(--panel); border-top: 3px solid var(--accent); padding: 14px max(14px, var(--sa-r)) calc(14px + var(--sa-b)) max(14px, var(--sa-l)); }
+  #garage h2 { margin: 0 0 10px; font: 400 32px/1 var(--display); letter-spacing: .08em; }
+  #cars { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card { display: flex; align-items: center; gap: 12px; min-width: 0; text-align: left; background: rgba(255,255,255,.06); border: 2px solid var(--panel-line); color: #fff; padding: 10px; cursor: pointer; }
+  .card[aria-pressed="true"] { border-color: var(--accent); background: rgba(255,255,255,.14); }
+  .card .prev { flex: none; width: 40px; height: 80px; }
+  .card svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 3px 3px rgba(0,0,0,.55)); }
+  .card b { display: block; font: 400 24px/1.05 var(--display); letter-spacing: .05em; }
+  .card small { display: block; font: 500 15px/1.2 var(--body); opacity: .72; margin-top: 3px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+  .row .label { font: 500 16px var(--body); letter-spacing: .1em; opacity: .7; text-transform: uppercase; }
+  .sw { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--ink); box-shadow: 0 0 0 2px var(--panel-line); cursor: pointer; padding: 0; }
+  .sw[aria-pressed="true"] { box-shadow: 0 0 0 3px #fff; }
+  .spacer { flex: 1; }
+  @media (max-width: 420px) { #cars { grid-template-columns: 1fr; } }
+
+  /* Markers */
+  .car { position: relative; width: 26px; height: 52px; }
+  .car b { position: absolute; left: 50%; top: 50%; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%; border: 3px solid var(--accent); animation: ping 1.8s ease-out infinite; }
+  .car-rot { position: absolute; inset: 0; }
+  .car-rot svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 3px 3px rgba(0,0,0,.6)); }
+  @keyframes ping { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
+  .flag { width: 26px; height: 26px; background: var(--accent); border: 3px solid var(--ink); transform: rotate(45deg); box-shadow: 0 3px 8px rgba(0,0,0,.5); }
+  @media (prefers-reduced-motion: reduce) {
+    .car b { animation: none; opacity: .5; }
+    .leaflet-tile-pane, #hint, #bArrow svg { transition: none; }
+    #splash.show { animation: fade 3s ease both; }
+    @keyframes fade { 0%, 100% { opacity: 0; } 12%, 82% { opacity: 1; } }
+  }
+  .leaflet-control-attribution { font: 500 11px var(--body); background: rgba(0,0,0,.55) !important; color: #ddd; margin-bottom: 0; }
+  .leaflet-control-attribution a { color: #fff; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body class="vice">
+<div id="map"></div>
+<div id="wash"></div><div id="glow"></div><div id="vig"></div>
+
+<div id="topstack" class="hud">
+  <form id="search" autocomplete="off">
+    <input id="q" type="search" placeholder="Enter an address" aria-label="Enter an address">
+    <button id="go" type="submit">GO</button>
+    <div id="results" hidden></div>
+  </form>
+  <div id="banner" hidden>
+    <div id="bArrow"></div>
+    <div class="meta">
+      <div id="bDist">--</div>
+      <div id="bText"></div>
+      <div id="bRoad"></div>
+    </div>
+  </div>
+  <div id="row2">
+    <div id="timer" hidden><span>MISSION</span><b id="tval">00:00</b></div>
+    <div id="chip"><span id="clock">--:--</span><b id="cash">$0</b></div>
+  </div>
+  <div id="hint">Enter an address to start a mission. Tap the map to preview a route. Hold the map to park your car.</div>
+</div>
+
+<div id="radar" class="hud" aria-hidden="true"><i id="radarArrow"></i></div>
+
+<div id="side" class="hud">
+  <button class="btn" id="open-garage" aria-label="Open garage" title="Garage">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 20V9l9-6 9 6v11"/><path d="M7 20v-6h10v6"/></svg>
+  </button>
+  <button class="btn" id="style-btn" aria-label="Switch map style" title="Map style">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>
+  </button>
+  <button class="btn" id="labels" aria-label="Toggle street names" title="Street names">Aa</button>
+  <button class="btn" id="voice" aria-label="Voice guidance" aria-pressed="true" title="Voice">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>
+  </button>
+  <button class="btn" id="locate" aria-label="Use my real location" title="My location">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+  </button>
+</div>
+
+<div id="wp" class="hud" hidden>
+  <div>
+    <div class="name" id="wpName">Destination</div>
+    <div class="sub" id="wpSub"></div>
+  </div>
+  <div class="stat" id="wpStat"></div>
+  <div class="actions">
+    <button class="act main only-preview" id="start" hidden>START MISSION</button>
+    <button class="act" id="demo" hidden>DEMO DRIVE</button>
+    <button class="act only-preview" id="clear">CLEAR</button>
+    <button class="act only-mission" id="abort">ABORT</button>
+  </div>
+</div>
+
+<div id="splash" aria-live="polite"><div class="t"></div><div class="s"></div></div>
+<div id="toast" class="hud" hidden></div>
+
+<section id="garage" class="hud" hidden aria-label="Garage">
+  <h2>GARAGE</h2>
+  <div id="cars"></div>
+  <div class="row"><span class="label">Paint</span><span id="swatches" class="row" style="margin:0"></span></div>
+  <div class="row">
+    <button class="act" id="park">PARK HERE</button>
+    <button class="act" id="install" hidden>INSTALL APP</button>
+    <span class="spacer"></span>
+    <button class="act main" id="close-garage">DONE</button>
+  </div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  var HOME = [51.9158, 5.0003]; // Meerkerk, the default parking spot
+  var $ = function (id) { return document.getElementById(id); };
+  var body = document.body;
+
+  /*PURE-START*/
+  function hav(a, b) {
+    var R = 6371000, r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  function bearing(a, b) {
+    var r = Math.PI / 180, y = Math.sin((b[1] - a[1]) * r) * Math.cos(b[0] * r);
+    var x = Math.cos(a[0] * r) * Math.sin(b[0] * r) - Math.sin(a[0] * r) * Math.cos(b[0] * r) * Math.cos((b[1] - a[1]) * r);
+    return (Math.atan2(y, x) / r + 360) % 360;
+  }
+  var COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+  function compass(deg) { return COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8]; }
+  function sayStep(s) {
+    var m = s.maneuver || {}, t = m.type, mod = m.modifier || '', name = s.name || '', onto = name ? ' onto ' + name : '';
+    var side = mod.replace(/^(slight |sharp )/, '');
+    switch (t) {
+      case 'depart': return 'Head ' + (typeof m.bearing_after === 'number' ? compass(m.bearing_after) : 'out') + (name ? ' on ' + name : '');
+      case 'arrive': return (mod === 'left' || mod === 'right') ? 'Arrive at your destination on the ' + mod : 'Arrive at your destination';
+      case 'roundabout': case 'rotary': return 'At the roundabout take exit ' + (m.exit || 1) + onto;
+      case 'roundabout turn': return 'At the roundabout turn ' + mod + onto;
+      case 'exit roundabout': case 'exit rotary': return 'Exit the roundabout' + onto;
+      case 'merge': return 'Merge ' + (mod || 'ahead') + onto;
+      case 'on ramp': return 'Take the ramp' + (side ? ' on the ' + side : '') + onto;
+      case 'off ramp': return 'Take the exit' + (side ? ' on the ' + side : '') + onto;
+      case 'fork': return 'Keep ' + (mod.indexOf('left') > -1 ? 'left' : 'right') + ' at the fork' + onto;
+      case 'end of road': return 'At the end of the road turn ' + mod + onto;
+      case 'new name': return 'Continue' + onto;
+      case 'continue': return (mod === 'straight' || !mod) ? 'Continue straight' + (name ? ' on ' + name : '') : 'Continue ' + mod + onto;
+      default:
+        if (mod === 'uturn') return 'Make a U-turn' + onto;
+        if (mod === 'straight' || !mod) return 'Continue straight' + (name ? ' on ' + name : '');
+        return 'Turn ' + mod + onto;
+    }
+  }
+  var MOD = { 'straight': 0, 'slight right': 45, 'right': 90, 'sharp right': 135, 'uturn': 180, 'sharp left': -135, 'left': -90, 'slight left': -45 };
+  function arrowDeg(s) {
+    var m = s.maneuver || {};
+    if (m.type === 'depart') return 0;
+    var d = MOD[m.modifier];
+    return d === undefined ? 0 : d;
+  }
+  function buildNav(route) {
+    var coords = route.geometry.coordinates.map(function (c) { return [c[1], c[0]]; });
+    var cum = [0], i;
+    for (i = 1; i < coords.length; i++) cum.push(cum[i - 1] + hav(coords[i - 1], coords[i]));
+    var total = cum[cum.length - 1] || 1;
+    var raw = (route.legs && route.legs[0] && route.legs[0].steps) || [];
+    var sum = raw.reduce(function (a, s) { return a + s.distance; }, 0) || 1, acc = 0;
+    var steps = raw.map(function (s) {
+      var o = { frac: acc / sum, text: sayStep(s), deg: arrowDeg(s), type: (s.maneuver && s.maneuver.type) || '', name: s.name || '', f300: false, fNow: false };
+      acc += s.distance;
+      return o;
+    });
+    if (!steps.length) steps = [{ frac: 1, text: 'Arrive at your destination', deg: 0, type: 'arrive', name: '', f300: false, fNow: false }];
+    return { coords: coords, cum: cum, total: total, dur: route.duration, dist: route.distance, steps: steps };
+  }
+  function snapTo(nav, pos) {
+    var c = nav.coords, k = Math.cos(pos[0] * Math.PI / 180), best = Infinity, bi = 0, bt = 0, i;
+    var px = pos[1] * k, py = pos[0];
+    for (i = 0; i < c.length - 1; i++) {
+      var ax = c[i][1] * k, ay = c[i][0], dx = c[i + 1][1] * k - ax, dy = c[i + 1][0] - ay;
+      var len2 = dx * dx + dy * dy, t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      var qx = ax + t * dx - px, qy = ay + t * dy - py, d2 = qx * qx + qy * qy;
+      if (d2 < best) { best = d2; bi = i; bt = t; }
+    }
+    return { progress: nav.cum[bi] + bt * (nav.cum[bi + 1] - nav.cum[bi]), off: Math.sqrt(best) * 111320 };
+  }
+  function nextStep(nav, frac) {
+    for (var i = 0; i < nav.steps.length; i++) if (nav.steps[i].frac > frac + 0.0003) return i;
+    return nav.steps.length - 1;
+  }
+  function fmtDist(m) {
+    if (m < 1000) return (m < 100 ? Math.max(0, Math.round(m / 10) * 10) : Math.round(m / 50) * 50) + ' m';
+    return (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km';
+  }
+  function fmtTime(ms) {
+    var s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return (h ? h + ':' : '') + p(m) + ':' + p(r);
+  }
+  /*PURE-END*/
+
+  /* ---------- Cars (top-down, nose up) ---------- */
+  var WHEELS_C5 = '<g fill="#0d0d0d"><rect x="3" y="22" width="9" height="17" rx="3"/><rect x="48" y="22" width="9" height="17" rx="3"/><rect x="3" y="82" width="9" height="19" rx="3"/><rect x="48" y="82" width="9" height="19" rx="3"/></g>';
+  var SVG_C5 =
+    '<svg viewBox="0 0 60 120" xmlns="http://www.w3.org/2000/svg">' + WHEELS_C5 +
+    '<path fill="var(--car)" stroke="#111" stroke-width="1.6" d="M30 3C41 3 49 9 50 23L52 46L53 88C53 103 46 115 30 117C14 115 7 103 7 88L8 46L10 23C11 9 19 3 30 3Z"/>' +
+    '<path d="M22 10C22 24 20 36 19 48M38 10C38 24 40 36 41 48" stroke="rgba(0,0,0,.28)" fill="none" stroke-width="1.2"/>' +
+    '<rect x="13" y="12" width="9" height="4" rx="2" fill="#fff6c8"/><rect x="38" y="12" width="9" height="4" rx="2" fill="#fff6c8"/>' +
+    '<path d="M15 51C22 47 38 47 45 51L42 64L18 64Z" fill="#16222c"/>' +
+    '<rect x="18" y="64" width="24" height="17" rx="3" fill="var(--car)" stroke="rgba(0,0,0,.4)" stroke-width="1"/>' +
+    '<rect x="18" y="64" width="24" height="17" rx="3" fill="rgba(0,0,0,.14)"/>' +
+    '<path d="M18 81L42 81L44 92C38 95 22 95 16 92Z" fill="#16222c"/>' +
+    '<rect x="5" y="52" width="6" height="4" rx="1.5" fill="var(--car)" stroke="#111" stroke-width="1"/><rect x="49" y="52" width="6" height="4" rx="1.5" fill="var(--car)" stroke="#111" stroke-width="1"/>' +
+    '<g fill="#ff2a2a"><circle cx="16" cy="110" r="2.4"/><circle cx="22" cy="112" r="2.4"/><circle cx="38" cy="112" r="2.4"/><circle cx="44" cy="110" r="2.4"/></g>' +
+    '</svg>';
+  var SVG_GT40 =
+    '<svg viewBox="0 0 60 120" xmlns="http://www.w3.org/2000/svg">' +
+    '<g fill="#0d0d0d"><rect x="3" y="20" width="9" height="16" rx="3"/><rect x="48" y="20" width="9" height="16" rx="3"/><rect x="2" y="78" width="10" height="20" rx="3"/><rect x="48" y="78" width="10" height="20" rx="3"/></g>' +
+    '<defs><clipPath id="gt40body"><path d="M30 2C39 2 45 7 46 19L49 42L54 84C55 100 47 112 30 114C13 112 5 100 6 84L11 42L14 19C15 7 21 2 30 2Z"/></clipPath></defs>' +
+    '<path fill="var(--car)" stroke="#111" stroke-width="1.6" d="M30 2C39 2 45 7 46 19L49 42L54 84C55 100 47 112 30 114C13 112 5 100 6 84L11 42L14 19C15 7 21 2 30 2Z"/>' +
+    '<path d="M19 53L41 53L40 74L20 74Z" fill="var(--car)" stroke="rgba(0,0,0,.4)" stroke-width="1"/>' +
+    '<g clip-path="url(#gt40body)"><rect x="22.5" y="0" width="5" height="120" fill="#fff"/><rect x="32.5" y="0" width="5" height="120" fill="#fff"/></g>' +
+    '<path d="M20 80H40M20 84H40M20 88H40M20 92H40" stroke="rgba(0,0,0,.45)" stroke-width="1"/>' +
+    '<path d="M15 40C22 33 38 33 45 40L43 53L17 53Z" fill="#16222c"/>' +
+    '<path d="M19 56L19 72M41 56L41 72" stroke="rgba(0,0,0,.4)" stroke-width="1" fill="none"/>' +
+    '<circle cx="30" cy="22" r="6.5" fill="#fff" stroke="#111" stroke-width="1"/><text x="30" y="25.6" font-size="10" font-weight="700" text-anchor="middle" fill="#111" font-family="Barlow Condensed, Arial Narrow, sans-serif">1</text>' +
+    '<circle cx="18" cy="9" r="2.6" fill="#fff6c8"/><circle cx="42" cy="9" r="2.6" fill="#fff6c8"/>' +
+    '<rect x="13" y="106" width="34" height="3" rx="1.5" fill="#111"/>' +
+    '<g fill="#ff2a2a"><rect x="11" y="110" width="6" height="2.6" rx="1"/><rect x="43" y="110" width="6" height="2.6" rx="1"/></g>' +
+    '</svg>';
+  var CARS = {
+    c5:   { name: 'Corvette C5',  tag: '5.7 L V8 coupe',         svg: SVG_C5,   pace: 1 },
+    gt40: { name: 'GT40 Le Mans', tag: 'Le Mans winner 1966-69', svg: SVG_GT40, pace: 0.8 }
+  };
+  var PAINT = [['#d7263d', 'Red'], ['#f2b705', 'Yellow'], ['#1f6fd0', 'Blue'], ['#b9c0c8', 'Silver'], ['#1d1d1f', 'Black']];
+  var car = 'c5', colors = { c5: '#d7263d', gt40: '#1f6fd0' }, cash = 0;
+  try {
+    var sg = JSON.parse(localStorage.getItem('atlas-garage') || 'null');
+    if (sg && CARS[sg.car]) { car = sg.car; colors = Object.assign(colors, sg.colors || {}); }
+    cash = parseInt(localStorage.getItem('atlas-cash') || '0', 10) || 0;
+  } catch (e) {}
+  function saveGarage() { try { localStorage.setItem('atlas-garage', JSON.stringify({ car: car, colors: colors })); } catch (e) {} }
+  function fmtCash(n) { return '$' + n.toLocaleString('en-US'); }
+  $('cash').textContent = fmtCash(cash);
+
+  /* ---------- State ---------- */
+  var style = 'vice', showLabels = true, labelLayer = null, voiceOn = true;
+  var wp = null, wpMarker = null, routeLine = null, nav = null, routeToken = 0, pendingAuto = false;
+  var remM = 0, remMin = 0, mission = null, timerId = 0, offCount = 0, lastReroute = 0;
+  var carPos = HOME, heading = 0, carMarker = null, watchId = null, hasFix = false, manual = false, follow = true;
+  var sim = false, raf = 0, wakeLock = null;
+
+  /* ---------- Map and radar ---------- */
+  var map = L.map('map', { zoomControl: false, center: HOME, zoom: 13, maxZoom: 19 });
+  map.attributionControl.setPrefix(false);
+  var attr = '&copy; OpenStreetMap contributors &copy; CARTO';
+  var TILE = {
+    atlas: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png',
+    vice:  'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
+  };
+  var LABEL = {
+    atlas: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
+    vice:  'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png'
+  };
+  map.createPane('labels');
+  map.getPane('labels').style.zIndex = 460;
+  map.getPane('labels').style.pointerEvents = 'none';
+  var baseLayer = null;
+  var radar = L.map('radar', { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false, doubleClickZoom: false, scrollWheelZoom: false, boxZoom: false, keyboard: false, tap: false, center: HOME, zoom: 17 });
+  var radarBase = null;
+  setTimeout(function () { radar.invalidateSize(); }, 50);
+
+  function tiles(url, extra) { return L.tileLayer(url, Object.assign({ attribution: attr, subdomains: 'abcd', maxZoom: 19, crossOrigin: true }, extra || {})); }
+  function routeColor() { return getComputedStyle(body).getPropertyValue('--route').trim(); }
+  function applyStyle(st) {
+    style = st;
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseLayer = tiles(TILE[st]).addTo(map);
+    if (radarBase) radar.removeLayer(radarBase);
+    radarBase = tiles(TILE[st], { attribution: '' }).addTo(radar);
+    if (labelLayer) map.removeLayer(labelLayer);
+    labelLayer = tiles(LABEL[st], { pane: 'labels', attribution: '' });
+    if (showLabels) labelLayer.addTo(map);
+    body.classList.toggle('vice', st === 'vice');
+    body.classList.toggle('atlas', st !== 'vice');
+    if (routeLine) routeLine.setStyle({ color: routeColor() });
+    var tc = document.querySelector('meta[name="theme-color"]'); if (tc) tc.content = st === 'vice' ? '#14061f' : '#14110f';
+    try { localStorage.setItem('atlas-style', st); } catch (e) {}
+  }
+  var savedStyle = 'vice'; try { savedStyle = localStorage.getItem('atlas-style') || 'vice'; } catch (e) {}
+  applyStyle(savedStyle === 'atlas' ? 'atlas' : 'vice');
+  $('style-btn').onclick = function () { applyStyle(style === 'vice' ? 'atlas' : 'vice'); };
+  $('labels').onclick = function () { showLabels = !showLabels; if (showLabels) labelLayer.addTo(map); else map.removeLayer(labelLayer); };
+
+  /* ---------- Small helpers ---------- */
+  var toastTimer = 0;
+  function toast(msg) {
+    var t = $('toast'); t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 3500);
+  }
+  function splash(title, sub) {
+    var el = $('splash');
+    el.querySelector('.t').textContent = title;
+    el.querySelector('.s').textContent = sub || '';
+    el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  }
+  function speak(text) {
+    if (!voiceOn || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text); u.lang = 'en-GB'; u.rate = 1.02;
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+  document.addEventListener('pointerdown', function () {
+    try { if ('speechSynthesis' in window) { var u = new SpeechSynthesisUtterance(' '); u.volume = 0; window.speechSynthesis.speak(u); } } catch (e) {}
+  }, { once: true });
+  $('voice').onclick = function () {
+    voiceOn = !voiceOn; $('voice').setAttribute('aria-pressed', String(voiceOn));
+    if (!voiceOn && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    toast(voiceOn ? 'Voice on' : 'Voice off');
+  };
+  function clock() { var d = new Date(), p = function (n) { return ('0' + n).slice(-2); }; $('clock').textContent = p(d.getHours()) + ':' + p(d.getMinutes()); }
+  clock(); setInterval(clock, 15000);
+  function keepAwake() {
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { wakeLock = l; }).catch(function () {}); } catch (e) {}
+  }
+  function releaseAwake() { try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {} }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && mission) keepAwake(); });
+
+  /* ---------- Car marker ---------- */
+  function carIcon() {
+    var html = '<div class="car" style="--car:' + colors[car] + '"><b></b><div class="car-rot" style="transform:rotate(' + heading + 'deg)">' + CARS[car].svg + '</div></div>';
+    return L.divIcon({ className: '', html: html, iconSize: [26, 52], iconAnchor: [13, 26] });
+  }
+  carMarker = L.marker(carPos, { icon: carIcon(), interactive: false, zIndexOffset: 1000 }).addTo(map);
+  function placeCar(ll, h) {
+    carPos = [ll[0], ll[1]];
+    if (typeof h === 'number' && !isNaN(h)) heading = h;
+    carMarker.setLatLng(carPos);
+    var el = carMarker.getElement(), rot = el && el.querySelector('.car-rot');
+    if (rot) rot.style.transform = 'rotate(' + heading + 'deg)';
+    $('radarArrow').style.transform = 'rotate(' + heading + 'deg)';
+    radar.setView(carPos, 17, { animate: false });
+  }
+  placeCar(HOME, 0);
+
+  /* ---------- Garage ---------- */
+  var garage = $('garage');
+  function renderGarage() {
+    var wrap = $('cars'); wrap.innerHTML = '';
+    Object.keys(CARS).forEach(function (k) {
+      var b = document.createElement('button');
+      b.className = 'card'; b.type = 'button'; b.setAttribute('aria-pressed', String(k === car));
+      b.innerHTML = '<div class="prev" style="--car:' + colors[k] + '">' + CARS[k].svg + '</div><div><b></b><small></small></div>';
+      b.querySelector('b').textContent = CARS[k].name;
+      b.querySelector('small').textContent = CARS[k].tag;
+      b.onclick = function () { car = k; saveGarage(); carMarker.setIcon(carIcon()); renderGarage(); };
+      wrap.appendChild(b);
+    });
+    var sw = $('swatches'); sw.innerHTML = '';
+    PAINT.forEach(function (p) {
+      var b = document.createElement('button');
+      b.className = 'sw'; b.type = 'button'; b.style.background = p[0]; b.setAttribute('aria-label', p[1]);
+      b.setAttribute('aria-pressed', String(colors[car] === p[0]));
+      b.onclick = function () { colors[car] = p[0]; saveGarage(); carMarker.setIcon(carIcon()); renderGarage(); };
+      sw.appendChild(b);
+    });
+  }
+  $('open-garage').onclick = function () { renderGarage(); garage.hidden = false; };
+  $('close-garage').onclick = function () { garage.hidden = true; };
+  $('park').onclick = function () { parkAt([map.getCenter().lat, map.getCenter().lng]); garage.hidden = true; };
+  var deferredInstall = null;
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredInstall = e; $('install').hidden = false; });
+  $('install').onclick = function () { if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; $('install').hidden = true; } };
+
+  /* ---------- Location ---------- */
+  function stopWatch() { if (watchId != null && navigator.geolocation) { navigator.geolocation.clearWatch(watchId); } watchId = null; }
+  function parkAt(ll) {
+    if (mission) return;
+    stopWatch(); stopSim(); manual = true; hasFix = false;
+    placeCar(ll);
+    if (wp) drawRoute();
+  }
+  function onFix(p) {
+    if (sim) return;
+    var ll = [p.coords.latitude, p.coords.longitude];
+    var h = (typeof p.coords.heading === 'number' && !isNaN(p.coords.heading)) ? p.coords.heading : (hav(carPos, ll) > 4 ? bearing(carPos, ll) : undefined);
+    placeCar(ll, h);
+    hasFix = true;
+    if (mission) {
+      if (follow) map.setView(carPos, Math.max(map.getZoom(), 16), { animate: false });
+      updateNav(carPos);
+    } else updateStats();
+  }
+  function startWatch() {
+    if (!navigator.geolocation || watchId != null) return;
+    manual = false;
+    watchId = navigator.geolocation.watchPosition(onFix, function () { watchId = null; }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+  }
+  function needFix(cb) {
+    if (manual || hasFix || !navigator.geolocation) { cb(); return; }
+    navigator.geolocation.getCurrentPosition(function (p) {
+      placeCar([p.coords.latitude, p.coords.longitude]); hasFix = true; startWatch(); cb();
+    }, function () { toast('Location unavailable. Routing from your parked car.'); cb(); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 });
+  }
+  $('locate').onclick = function () {
+    if (mission && sim) return;
+    manual = false; follow = true;
+    needFix(function () { startWatch(); map.flyTo(carPos, Math.max(map.getZoom(), 16)); });
+  };
+  map.on('dragstart', function () { follow = false; });
+
+  /* ---------- Route ---------- */
+  function fetchRoute(from, to) {
+    var url = 'https://router.project-osrm.org/route/v1/driving/' + from[1] + ',' + from[0] + ';' + to[1] + ',' + to[0] + '?overview=full&geometries=geojson&steps=true';
+    return fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.routes || !d.routes[0]) throw new Error('no route');
+      return d.routes[0];
+    });
+  }
+  function applyRoute(route, fit) {
+    nav = buildNav(route);
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(nav.coords, { color: routeColor(), weight: 7, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    carMarker.setZIndexOffset(1000);
+    $('start').hidden = false; $('demo').hidden = false;
+    if (!mission) { remM = nav.dist; remMin = nav.dur / 60; }
+    updateStats();
+    if (fit) map.fitBounds(routeLine.getBounds(), { padding: [90, 90] });
+  }
+  function drawRoute() {
+    var token = ++routeToken;
+    fetchRoute(carPos, wp).then(function (route) {
+      if (token !== routeToken || !wp) return;
+      applyRoute(route, !mission);
+      if (pendingAuto) { pendingAuto = false; startMission(); }
+    }).catch(function () { pendingAuto = false; toast('No driving route found.'); });
+  }
+  function updateStats() {
+    if (!wp) return;
+    var stat = $('wpStat');
+    if (nav) stat.innerHTML = fmtDist(remM) + '<small>' + Math.max(1, Math.round(remMin)) + ' MIN</small>';
+    else stat.innerHTML = fmtDist(hav(carPos, wp)) + '<small>STRAIGHT LINE</small>';
+  }
+  function setDestination(ll, label, auto) {
+    if (mission) return;
+    stopSim();
+    wp = [ll.lat, ll.lng]; pendingAuto = !!auto; nav = null;
+    if (wpMarker) map.removeLayer(wpMarker);
+    wpMarker = L.marker(wp, { icon: L.divIcon({ className: '', html: '<div class="flag"></div>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(map);
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    $('wp').hidden = false; body.classList.add('has-wp');
+    $('start').hidden = true; $('demo').hidden = true;
+    $('wpName').textContent = label || 'Destination';
+    $('wpSub').textContent = wp[0].toFixed(4) + ', ' + wp[1].toFixed(4);
+    $('hint').classList.add('gone');
+    updateStats();
+    if (!label) reverse(wp);
+    needFix(drawRoute);
+  }
+  function reverse(p) {
+    fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&lat=' + p[0] + '&lon=' + p[1])
+      .then(function (r) { return r.json(); }).then(function (d) {
+        if (!wp || wp[0] !== p[0]) return;
+        var a = d.address || {};
+        $('wpName').textContent = a.road || a.pedestrian || a.neighbourhood || d.name || 'Destination';
+        var sub = [a.house_number, a.suburb || a.village || a.town || a.city].filter(Boolean).join(' ');
+        if (sub) $('wpSub').textContent = sub;
+      }).catch(function () {});
+  }
+  function clearRoute() {
+    wp = null; nav = null; pendingAuto = false; routeToken++;
+    $('wp').hidden = true; body.classList.remove('has-wp');
+    if (wpMarker) { map.removeLayer(wpMarker); wpMarker = null; }
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  }
+  $('clear').onclick = function () { stopSim(); clearRoute(); };
+  map.on('click', function (e) { if (mission) return; $('results').hidden = true; setDestination(e.latlng, null, false); });
+  map.on('contextmenu', function (e) { parkAt([e.latlng.lat, e.latlng.lng]); });
+
+  /* ---------- Mission and navigation ---------- */
+  var ARROW = '<svg viewBox="0 0 24 24"><path d="M12 2.5 20 12h-5.2v9.5H9.2V12H4z"/></svg>';
+  var FLAG = '<svg viewBox="0 0 24 24"><path d="M12 2 22 12 12 22 2 12z"/></svg>';
+  function setBanner(st, d, i) {
+    var arr = $('bArrow');
+    if (st.type === 'arrive') arr.innerHTML = FLAG;
+    else { arr.innerHTML = ARROW; arr.firstChild.style.transform = 'rotate(' + st.deg + 'deg)'; }
+    $('bDist').textContent = fmtDist(d);
+    $('bText').textContent = st.text;
+    var road = i > 0 ? nav.steps[i - 1].name : '';
+    $('bRoad').textContent = road ? 'on ' + road : '';
+  }
+  function updateNav(pos) {
+    if (!mission || !nav) return;
+    var s = snapTo(nav, pos);
+    if (!sim && s.off > 60) {
+      offCount++;
+      if (offCount >= 3 && Date.now() - lastReroute > 10000) { reroute(pos); return; }
+    } else offCount = 0;
+    var frac = Math.min(1, s.progress / nav.total);
+    remM = Math.max(0, nav.dist * (1 - frac)); remMin = nav.dur / 60 * (1 - frac);
+    var i = nextStep(nav, frac), st = nav.steps[i], d = Math.max(0, (st.frac - frac) * nav.total);
+    setBanner(st, d, i);
+    updateStats();
+    if (d < 350 && d > 80 && !st.f300) { st.f300 = true; speak('In ' + (Math.round(d / 50) * 50) + ' metres, ' + st.text); }
+    if (d < 60 && !st.fNow) { st.fNow = true; speak(st.text); }
+    if (remM < 30) missionPassed();
+  }
+  function reroute(pos) {
+    lastReroute = Date.now(); offCount = 0;
+    speak('Rerouting'); toast('Rerouting...');
+    fetchRoute(pos, wp).then(function (route) {
+      if (!mission) return;
+      applyRoute(route, false); updateNav(pos);
+    }).catch(function () {});
+  }
+  function tick() { if (mission) $('tval').textContent = fmtTime(Date.now() - mission.t0); }
+  function startMission() {
+    if (mission || !wp || !nav) return;
+    mission = { name: $('wpName').textContent, t0: Date.now(), km: nav.dist / 1000 };
+    remM = nav.dist; remMin = nav.dur / 60; follow = true; offCount = 0;
+    body.classList.add('mission');
+    $('banner').hidden = false; $('search').hidden = true; $('timer').hidden = false; $('results').hidden = true;
+    splash('MISSION STARTED', mission.name);
+    tick(); timerId = setInterval(tick, 250);
+    startWatch(); keepAwake();
+    speak('Mission started. ' + nav.steps[0].text);
+    map.setView(carPos, 17, { animate: false });
+    updateNav(carPos);
+  }
+  function finishMission() {
+    stopSim(); clearInterval(timerId); mission = null;
+    body.classList.remove('mission');
+    $('banner').hidden = true; $('search').hidden = false; $('timer').hidden = true;
+    releaseAwake(); clearRoute();
+  }
+  function missionPassed() {
+    if (!mission) return;
+    var ms = Date.now() - mission.t0, pay = Math.max(50, Math.round(mission.km * 10) * 10);
+    cash += pay; try { localStorage.setItem('atlas-cash', String(cash)); } catch (e) {}
+    $('cash').textContent = fmtCash(cash);
+    finishMission();
+    splash('MISSION PASSED', 'TIME ' + fmtTime(ms) + '   +' + fmtCash(pay));
+    speak('Mission passed. You have arrived.');
+  }
+  function missionFailed() {
+    if (!mission) return;
+    finishMission();
+    splash('MISSION FAILED', 'ROUTE ABORTED');
+    speak('Mission aborted.');
+  }
+  $('start').onclick = startMission;
+  $('abort').onclick = missionFailed;
+
+  /* ---------- Demo drive: the car follows the route and feeds the navigation ---------- */
+  function stopSim() {
+    if (!sim) return;
+    sim = false; cancelAnimationFrame(raf); $('demo').textContent = 'DEMO DRIVE';
+  }
+  $('demo').onclick = function () {
+    if (sim) { stopSim(); return; }
+    if (!nav) return;
+    if (!mission) startMission();
+    if (!mission) return;
+    var pts = nav.coords, cum = nav.cum, total = nav.total;
+    stopWatch(); hasFix = false; manual = true;
+    sim = true; follow = true; $('demo').textContent = 'STOP DEMO';
+    var secs = Math.min(45, Math.max(8, total / 1000 * 3)) * CARS[car].pace;
+    placeCar(pts[0], bearing(pts[0], pts[1] || pts[0]));
+    map.setView(pts[0], 17, { animate: false });
+    var t0 = performance.now(), idx = 0;
+    function frame(now) {
+      if (!sim) return;
+      var k = Math.min(1, (now - t0) / (secs * 1000));
+      var e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      var dd = e * total;
+      while (idx < pts.length - 2 && cum[idx + 1] < dd) idx++;
+      var seg = cum[idx + 1] - cum[idx] || 1, f = Math.min(1, Math.max(0, (dd - cum[idx]) / seg));
+      var a = pts[idx], b = pts[Math.min(idx + 1, pts.length - 1)];
+      var pos = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+      var target = bearing(a, b), diff = ((target - heading + 540) % 360) - 180;
+      placeCar(pos, (heading + diff * 0.18 + 360) % 360);
+      if (follow) map.setView(pos, map.getZoom(), { animate: false });
+      updateNav(pos);
+      if (sim) { if (k < 1) raf = requestAnimationFrame(frame); else stopSim(); }
+    }
+    raf = requestAnimationFrame(frame);
+  };
+
+  /* ---------- Search ---------- */
+  var results = $('results');
+  $('search').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var q = $('q').value.trim();
+    if (!q) return;
+    document.activeElement && document.activeElement.blur();
+    fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=' + encodeURIComponent(q))
+      .then(function (r) { return r.json(); }).then(function (list) {
+        results.innerHTML = '';
+        if (!list.length) { results.innerHTML = '<button type="button">No results<small>Try another spelling</small></button>'; results.hidden = false; return; }
+        list.forEach(function (it) {
+          var parts = it.display_name.split(', ');
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.innerHTML = '<span></span><small></small>';
+          b.firstChild.textContent = parts[0];
+          b.lastChild.textContent = parts.slice(1, 4).join(', ');
+          b.onclick = function () {
+            results.hidden = true;
+            var ll = L.latLng(+it.lat, +it.lon);
+            map.setView(ll, 14);
+            setDestination(ll, parts[0], true);
+          };
+          results.appendChild(b);
+        });
+        results.hidden = false;
+      }).catch(function () {
+        results.innerHTML = '<button type="button">Search failed<small>Check your connection</small></button>'; results.hidden = false;
+      });
+  });
+
+  setTimeout(function () { $('hint').classList.add('gone'); }, 9000);
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
+})();
+</script>
+</body>
+</html>
