@@ -1,6 +1,6 @@
 // Street Atlas service worker: app shell works offline, map tiles you have seen are kept.
-var SHELL = 'atlas-shell-v2';
-var TILES = 'atlas-tiles-v1';
+var SHELL = 'atlas-shell-v3';
+var TILES = 'atlas-tiles-v2';
 var MAX_TILES = 800;
 var LEAFLET = [
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
@@ -39,7 +39,7 @@ self.addEventListener('fetch', function (e) {
   var url = new URL(req.url);
 
   // Map tiles: cache first, fill from the network.
-  if (url.hostname.endsWith('basemaps.cartocdn.com')) {
+  if (url.hostname === 'tile.openstreetmap.org') {
     e.respondWith(caches.open(TILES).then(function (cache) {
       return cache.match(req).then(function (hit) {
         return hit || fetch(req).then(function (res) {

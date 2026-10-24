@@ -52,7 +52,7 @@
   /* Map look: CSS filters on the tile panes (main map and radar) */
   .leaflet-tile-pane { transition: filter .4s; }
   body.atlas .leaflet-tile-pane { filter: sepia(.45) saturate(.95) hue-rotate(-6deg) contrast(1.12) brightness(.93); }
-  body.vice .leaflet-tile-pane { filter: brightness(1.25) contrast(1.25) saturate(1.2); }
+  body.vice .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(1.2) saturate(.9); }
   #wash, #glow, #vig { position: absolute; inset: 0; pointer-events: none; }
   #wash { z-index: 450; opacity: 0; transition: opacity .4s; mix-blend-mode: color;
     background: linear-gradient(165deg, #ff2d95 0%, #7a2cff 45%, #00e5d0 100%); }
@@ -157,6 +157,24 @@
   }
   .leaflet-control-attribution { font: 500 11px var(--body); background: rgba(0,0,0,.55) !important; color: #ddd; margin-bottom: 0; }
   .leaflet-control-attribution a { color: #fff; }
+  /* Landscape phones: compact HUD, radar hidden, cards kept to the left so the buttons stay free */
+  @media (max-height: 520px) {
+    #radar, #hint { display: none; }
+    #topstack { right: auto; width: min(560px, calc(100% - 90px)); }
+    #bArrow { width: 40px; height: 40px; }
+    #bDist { font-size: 30px; }
+    #bText { font-size: 18px; }
+    #banner { padding: 6px 12px; gap: 10px; }
+    #wp { right: auto; width: min(560px, calc(100% - 90px)); padding: 6px 12px; gap: 4px 10px; }
+    #wp .name { font-size: 22px; }
+    #wp .stat { font-size: 24px; }
+    .act { padding: 5px 12px; font-size: 18px; }
+    .btn { width: 40px; height: 40px; }
+    .btn svg { width: 22px; height: 22px; }
+    #side { gap: 4px; }
+    body.has-wp { --stack: 12px; }
+    #garage { max-height: 100%; overflow: auto; }
+  }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -194,7 +212,6 @@
   <button class="btn" id="style-btn" aria-label="Switch map style" title="Map style">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>
   </button>
-  <button class="btn" id="labels" aria-label="Toggle street names" title="Street names">Aa</button>
   <button class="btn" id="voice" aria-label="Voice guidance" aria-pressed="true" title="Voice">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>
   </button>
@@ -368,7 +385,7 @@
   $('cash').textContent = fmtCash(cash);
 
   /* ---------- State ---------- */
-  var style = 'vice', showLabels = true, labelLayer = null, voiceOn = true;
+  var style = 'vice', voiceOn = true;
   var wp = null, wpMarker = null, routeLine = null, nav = null, routeToken = 0, pendingAuto = false;
   var remM = 0, remMin = 0, mission = null, timerId = 0, offCount = 0, lastReroute = 0;
   var carPos = HOME, heading = 0, carMarker = null, watchId = null, hasFix = false, manual = false, follow = true;
@@ -377,34 +394,20 @@
   /* ---------- Map and radar ---------- */
   var map = L.map('map', { zoomControl: false, center: HOME, zoom: 13, maxZoom: 19 });
   map.attributionControl.setPrefix(false);
-  var attr = '&copy; OpenStreetMap contributors &copy; CARTO';
-  var TILE = {
-    atlas: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png',
-    vice:  'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
-  };
-  var LABEL = {
-    atlas: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
-    vice:  'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png'
-  };
-  map.createPane('labels');
-  map.getPane('labels').style.zIndex = 460;
-  map.getPane('labels').style.pointerEvents = 'none';
+  var attr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  var OSM = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';   // no API key needed; the two styles are CSS filters on these tiles
   var baseLayer = null;
   var radar = L.map('radar', { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false, doubleClickZoom: false, scrollWheelZoom: false, boxZoom: false, keyboard: false, tap: false, center: HOME, zoom: 17 });
   var radarBase = null;
   setTimeout(function () { radar.invalidateSize(); }, 50);
 
-  function tiles(url, extra) { return L.tileLayer(url, Object.assign({ attribution: attr, subdomains: 'abcd', maxZoom: 19, crossOrigin: true }, extra || {})); }
   function routeColor() { return getComputedStyle(body).getPropertyValue('--route').trim(); }
   function applyStyle(st) {
     style = st;
-    if (baseLayer) map.removeLayer(baseLayer);
-    baseLayer = tiles(TILE[st]).addTo(map);
-    if (radarBase) radar.removeLayer(radarBase);
-    radarBase = tiles(TILE[st], { attribution: '' }).addTo(radar);
-    if (labelLayer) map.removeLayer(labelLayer);
-    labelLayer = tiles(LABEL[st], { pane: 'labels', attribution: '' });
-    if (showLabels) labelLayer.addTo(map);
+    if (!baseLayer) {
+      baseLayer = L.tileLayer(OSM, { attribution: attr, maxZoom: 19 }).addTo(map);
+      radarBase = L.tileLayer(OSM, { maxZoom: 19 }).addTo(radar);
+    }
     body.classList.toggle('vice', st === 'vice');
     body.classList.toggle('atlas', st !== 'vice');
     if (routeLine) routeLine.setStyle({ color: routeColor() });
@@ -414,7 +417,6 @@
   var savedStyle = 'vice'; try { savedStyle = localStorage.getItem('atlas-style') || 'vice'; } catch (e) {}
   applyStyle(savedStyle === 'atlas' ? 'atlas' : 'vice');
   $('style-btn').onclick = function () { applyStyle(style === 'vice' ? 'atlas' : 'vice'); };
-  $('labels').onclick = function () { showLabels = !showLabels; if (showLabels) labelLayer.addTo(map); else map.removeLayer(labelLayer); };
 
   /* ---------- Small helpers ---------- */
   var toastTimer = 0;
