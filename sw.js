@@ -1,12 +1,13 @@
 // Street Atlas service worker: app shell works offline, map tiles you have seen are kept.
-var SHELL = 'atlas-shell-v3';
-var TILES = 'atlas-tiles-v2';
+var SHELL = 'atlas-shell-v5';
+var TILES = 'atlas-tiles-v3';
 var MAX_TILES = 800;
 var LEAFLET = [
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'
+  'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
+  'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
 ];
-var CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+var CORE = ['./', 'index.html', 'cars3d.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(
